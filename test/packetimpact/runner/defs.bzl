@@ -286,6 +286,9 @@ ALL_TESTS = [
     PacketimpactTestInfo(
         name = "tcp_fin_retransmission",
     ),
+    PacketimpactTestInfo(
+        name = "icmp_send_recv_dgram",
+    ),
 ]
 
 def validate_all_tests():
