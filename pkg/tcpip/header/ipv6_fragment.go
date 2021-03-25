@@ -156,3 +156,13 @@ func (b IPv6Fragment) TOS() (uint8, uint32) {
 func (b IPv6Fragment) SetTOS(t uint8, l uint32) {
 	panic("not supported")
 }
+
+// SetPacketSize implements Network.
+func (IPv6Fragment) SetPacketSize(uint16) {
+	panic("not supported")
+}
+
+// CalculateAndSetChecksum implements Network.
+func (IPv6Fragment) CalculateAndSetChecksum() {
+	panic("not supported")
+}

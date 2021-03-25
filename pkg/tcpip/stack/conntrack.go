@@ -372,7 +372,7 @@ func (ct *ConnTrack) insertConn(conn *conn) {
 // handlePacket will manipulate the port and address of the packet if the
 // connection exists. Returns whether, after the packet traverses the tables,
 // it should create a new entry in the table.
-func (ct *ConnTrack) handlePacket(pkt *PacketBuffer, hook Hook, r *Route) bool {
+func (ct *ConnTrack) handlePacket(pkt *PacketBuffer, hook Hook) bool {
 	if pkt.NatDone {
 		return false
 	}
@@ -443,14 +443,18 @@ func (ct *ConnTrack) handlePacket(pkt *PacketBuffer, hook Hook, r *Route) bool {
 	case Prerouting, Input:
 	case Output, Postrouting:
 		// Calculate the TCP checksum and set it.
-		tcpHeader.SetChecksum(0)
-		length := uint16(len(tcpHeader) + pkt.Data().Size())
-		xsum := header.PseudoHeaderChecksum(header.TCPProtocolNumber, netHeader.SourceAddress(), netHeader.DestinationAddress(), length)
-		if pkt.GSOOptions.Type != GSONone && pkt.GSOOptions.NeedsCsum {
-			tcpHeader.SetChecksum(xsum)
-		} else if r.RequiresTXTransportChecksum() {
-			xsum = header.ChecksumCombine(xsum, pkt.Data().AsRange().Checksum())
-			tcpHeader.SetChecksum(^tcpHeader.CalculateChecksum(xsum))
+		switch pkt.TransportChecksumStatus {
+		case TransportChecksumNone:
+		case TransportChecksumNotNeeded:
+			tcpHeader.SetChecksum(0)
+		case TransportChecksumPartial, TransportChecksumCalculated:
+			tcpHeader.SetChecksum(header.PseudoHeaderChecksum(header.TCPProtocolNumber, netHeader.SourceAddress(), netHeader.DestinationAddress(), uint16(len(tcpHeader)+pkt.Data().Size())))
+
+			if pkt.TransportChecksumStatus == TransportChecksumCalculated {
+				tcpHeader.SetChecksum(^tcpHeader.CalculateChecksum(pkt.Data().AsRange().Checksum()))
+			}
+		default:
+			panic(fmt.Sprintf("unhandled TargetTransportChecksumStatus = %d", pkt.TransportChecksumStatus))
 		}
 	default:
 		panic(fmt.Sprintf("unrecognized hook = %s", hook))

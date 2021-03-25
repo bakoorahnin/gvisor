@@ -29,7 +29,7 @@ type AcceptTarget struct {
 }
 
 // Action implements Target.Action.
-func (*AcceptTarget) Action(*PacketBuffer, *ConnTrack, Hook, *Route, tcpip.Address) (RuleVerdict, int) {
+func (*AcceptTarget) Action(*PacketBuffer, *ConnTrack, Hook, tcpip.Address) (RuleVerdict, int) {
 	return RuleAccept, 0
 }
 
@@ -40,7 +40,7 @@ type DropTarget struct {
 }
 
 // Action implements Target.Action.
-func (*DropTarget) Action(*PacketBuffer, *ConnTrack, Hook, *Route, tcpip.Address) (RuleVerdict, int) {
+func (*DropTarget) Action(*PacketBuffer, *ConnTrack, Hook, tcpip.Address) (RuleVerdict, int) {
 	return RuleDrop, 0
 }
 
@@ -52,7 +52,7 @@ type ErrorTarget struct {
 }
 
 // Action implements Target.Action.
-func (*ErrorTarget) Action(*PacketBuffer, *ConnTrack, Hook, *Route, tcpip.Address) (RuleVerdict, int) {
+func (*ErrorTarget) Action(*PacketBuffer, *ConnTrack, Hook, tcpip.Address) (RuleVerdict, int) {
 	log.Debugf("ErrorTarget triggered.")
 	return RuleDrop, 0
 }
@@ -67,7 +67,7 @@ type UserChainTarget struct {
 }
 
 // Action implements Target.Action.
-func (*UserChainTarget) Action(*PacketBuffer, *ConnTrack, Hook, *Route, tcpip.Address) (RuleVerdict, int) {
+func (*UserChainTarget) Action(*PacketBuffer, *ConnTrack, Hook, tcpip.Address) (RuleVerdict, int) {
 	panic("UserChainTarget should never be called.")
 }
 
@@ -79,7 +79,7 @@ type ReturnTarget struct {
 }
 
 // Action implements Target.Action.
-func (*ReturnTarget) Action(*PacketBuffer, *ConnTrack, Hook, *Route, tcpip.Address) (RuleVerdict, int) {
+func (*ReturnTarget) Action(*PacketBuffer, *ConnTrack, Hook, tcpip.Address) (RuleVerdict, int) {
 	return RuleReturn, 0
 }
 
@@ -103,7 +103,7 @@ type RedirectTarget struct {
 // TODO(gvisor.dev/issue/170): Parse headers without copying. The current
 // implementation only works for Prerouting and calls pkt.Clone(), neither
 // of which should be the case.
-func (rt *RedirectTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, r *Route, address tcpip.Address) (RuleVerdict, int) {
+func (rt *RedirectTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, address tcpip.Address) (RuleVerdict, int) {
 	// Sanity check.
 	if rt.NetworkProtocol != pkt.NetworkProtocolNumber {
 		panic(fmt.Sprintf(
@@ -145,16 +145,21 @@ func (rt *RedirectTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, r 
 
 		// Calculate UDP checksum and set it.
 		if hook == Output {
-			udpHeader.SetChecksum(0)
 			netHeader := pkt.Network()
 			netHeader.SetDestinationAddress(address)
 
-			// Only calculate the checksum if offloading isn't supported.
-			if r.RequiresTXTransportChecksum() {
-				length := uint16(pkt.Size()) - uint16(len(pkt.NetworkHeader().View()))
-				xsum := header.PseudoHeaderChecksum(protocol, netHeader.SourceAddress(), netHeader.DestinationAddress(), length)
-				xsum = header.ChecksumCombine(xsum, pkt.Data().AsRange().Checksum())
-				udpHeader.SetChecksum(^udpHeader.CalculateChecksum(xsum))
+			switch pkt.TransportChecksumStatus {
+			case TransportChecksumNone:
+			case TransportChecksumNotNeeded:
+				udpHeader.SetChecksum(0)
+			case TransportChecksumPartial, TransportChecksumCalculated:
+				udpHeader.SetChecksum(header.PseudoHeaderChecksum(protocol, netHeader.SourceAddress(), netHeader.DestinationAddress(), uint16(pkt.Size())-uint16(len(pkt.NetworkHeader().View()))))
+
+				if pkt.TransportChecksumStatus == TransportChecksumCalculated {
+					udpHeader.SetChecksum(^udpHeader.CalculateChecksum(pkt.Data().AsRange().Checksum()))
+				}
+			default:
+				panic(fmt.Sprintf("unhandled TargetTransportChecksumStatus = %d", pkt.TransportChecksumStatus))
 			}
 		}
 
@@ -174,7 +179,7 @@ func (rt *RedirectTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, r 
 		// packet of the connection comes here. Other packets will be
 		// manipulated in connection tracking.
 		if conn := ct.insertRedirectConn(pkt, hook, rt.Port, address); conn != nil {
-			ct.handlePacket(pkt, hook, r)
+			ct.handlePacket(pkt, hook)
 		}
 	default:
 		return RuleDrop, 0
@@ -194,7 +199,7 @@ type SNATTarget struct {
 }
 
 // Action implements Target.Action.
-func (st *SNATTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, r *Route, address tcpip.Address) (RuleVerdict, int) {
+func (st *SNATTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, address tcpip.Address) (RuleVerdict, int) {
 	// Sanity check.
 	if st.NetworkProtocol != pkt.NetworkProtocolNumber {
 		panic(fmt.Sprintf(
@@ -223,17 +228,22 @@ func (st *SNATTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, r *Rou
 	switch protocol := pkt.TransportProtocolNumber; protocol {
 	case header.UDPProtocolNumber:
 		udpHeader := header.UDP(pkt.TransportHeader().View())
-		udpHeader.SetChecksum(0)
 		udpHeader.SetSourcePort(st.Port)
 		netHeader := pkt.Network()
 		netHeader.SetSourceAddress(st.Addr)
 
-		// Only calculate the checksum if offloading isn't supported.
-		if r.RequiresTXTransportChecksum() {
-			length := uint16(pkt.Size()) - uint16(len(pkt.NetworkHeader().View()))
-			xsum := header.PseudoHeaderChecksum(protocol, netHeader.SourceAddress(), netHeader.DestinationAddress(), length)
-			xsum = header.ChecksumCombine(xsum, pkt.Data().AsRange().Checksum())
-			udpHeader.SetChecksum(^udpHeader.CalculateChecksum(xsum))
+		switch pkt.TransportChecksumStatus {
+		case TransportChecksumNone:
+		case TransportChecksumNotNeeded:
+			udpHeader.SetChecksum(0)
+		case TransportChecksumPartial, TransportChecksumCalculated:
+			udpHeader.SetChecksum(header.PseudoHeaderChecksum(protocol, netHeader.SourceAddress(), netHeader.DestinationAddress(), uint16(pkt.Size())-uint16(len(pkt.NetworkHeader().View()))))
+
+			if pkt.TransportChecksumStatus == TransportChecksumCalculated {
+				udpHeader.SetChecksum(^udpHeader.CalculateChecksum(pkt.Data().AsRange().Checksum()))
+			}
+		default:
+			panic(fmt.Sprintf("unhandled TargetTransportChecksumStatus = %d", pkt.TransportChecksumStatus))
 		}
 
 		// After modification, IPv4 packets need a valid checksum.
@@ -252,7 +262,7 @@ func (st *SNATTarget) Action(pkt *PacketBuffer, ct *ConnTrack, hook Hook, r *Rou
 		// packet of the connection comes here. Other packets will be
 		// manipulated in connection tracking.
 		if conn := ct.insertSNATConn(pkt, hook, st.Port, st.Addr); conn != nil {
-			ct.handlePacket(pkt, hook, r)
+			ct.handlePacket(pkt, hook)
 		}
 	default:
 		return RuleDrop, 0
