@@ -73,6 +73,7 @@ go_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/buffer",
         "//pkg/ilist",
         "//pkg/log",
         "//pkg/rand",

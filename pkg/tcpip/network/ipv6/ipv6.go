@@ -1407,8 +1407,9 @@ func (e *endpoint) handleValidatedPacket(h header.IPv6, pkt *stack.PacketBuffer)
 			//
 			// For reassembled fragments, pkt.TransportHeader is unset, so this is a
 			// no-op and pkt.Data begins with the transport header.
-			extHdr.Buf.TrimFront(pkt.TransportHeader().View().Size())
-			pkt.Data().Replace(extHdr.Buf)
+			trim := pkt.Data().Size() - extHdr.Buf.Size()
+			trim += pkt.TransportHeader().View().Size()
+			pkt.Data().DeleteFront(trim)
 
 			stats.PacketsDelivered.Increment()
 			if p := tcpip.TransportProtocolNumber(extHdr.Identifier); p == header.ICMPv6ProtocolNumber {

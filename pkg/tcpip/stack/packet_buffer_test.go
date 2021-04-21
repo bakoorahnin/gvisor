@@ -112,23 +112,13 @@ func TestPacketHeaderPush(t *testing.T) {
 			if got, want := pk.Size(), allHdrSize+len(test.data); got != want {
 				t.Errorf("After pk.Size() = %d, want %d", got, want)
 			}
-			checkData(t, pk, test.data)
-			checkViewEqual(t, "After pk.Views()", concatViews(pk.Views()...),
-				concatViews(test.link, test.network, test.transport, test.data))
-			// Check the after values for each header.
-			checkPacketHeader(t, "After pk.LinkHeader", pk.LinkHeader(), test.link)
-			checkPacketHeader(t, "After pk.NetworkHeader", pk.NetworkHeader(), test.network)
-			checkPacketHeader(t, "After pk.TransportHeader", pk.TransportHeader(), test.transport)
-			// Check the after values for PayloadSince.
-			checkViewEqual(t, "After PayloadSince(LinkHeader)",
-				PayloadSince(pk.LinkHeader()),
-				concatViews(test.link, test.network, test.transport, test.data))
-			checkViewEqual(t, "After PayloadSince(NetworkHeader)",
-				PayloadSince(pk.NetworkHeader()),
-				concatViews(test.network, test.transport, test.data))
-			checkViewEqual(t, "After PayloadSince(TransportHeader)",
-				PayloadSince(pk.TransportHeader()),
-				concatViews(test.transport, test.data))
+			// Check the after state.
+			checkPacketContents(t, "After ", pk, packetContents{
+				link:      test.link,
+				network:   test.network,
+				transport: test.transport,
+				data:      test.data,
+			})
 		})
 	}
 }
@@ -199,29 +189,13 @@ func TestPacketHeaderConsume(t *testing.T) {
 			if got, want := pk.Size(), len(test.data); got != want {
 				t.Errorf("After pk.Size() = %d, want %d", got, want)
 			}
-			// After state of pk.
-			var (
-				link      = test.data[:test.link]
-				network   = test.data[test.link:][:test.network]
-				transport = test.data[test.link+test.network:][:test.transport]
-				payload   = test.data[allHdrSize:]
-			)
-			checkData(t, pk, payload)
-			checkViewEqual(t, "After pk.Views()", concatViews(pk.Views()...), test.data)
-			// Check the after values for each header.
-			checkPacketHeader(t, "After pk.LinkHeader", pk.LinkHeader(), link)
-			checkPacketHeader(t, "After pk.NetworkHeader", pk.NetworkHeader(), network)
-			checkPacketHeader(t, "After pk.TransportHeader", pk.TransportHeader(), transport)
-			// Check the after values for PayloadSince.
-			checkViewEqual(t, "After PayloadSince(LinkHeader)",
-				PayloadSince(pk.LinkHeader()),
-				concatViews(link, network, transport, payload))
-			checkViewEqual(t, "After PayloadSince(NetworkHeader)",
-				PayloadSince(pk.NetworkHeader()),
-				concatViews(network, transport, payload))
-			checkViewEqual(t, "After PayloadSince(TransportHeader)",
-				PayloadSince(pk.TransportHeader()),
-				concatViews(transport, payload))
+			// Check the after state of pk.
+			checkPacketContents(t, "After ", pk, packetContents{
+				link:      test.data[:test.link],
+				network:   test.data[test.link:][:test.network],
+				transport: test.data[test.link+test.network:][:test.transport],
+				data:      test.data[allHdrSize:],
+			})
 		})
 	}
 }
@@ -249,6 +223,39 @@ func TestPacketHeaderConsumeDataTooShort(t *testing.T) {
 	// Check packet should look the same as initial packet.
 	checkInitialPacketBuffer(t, pk, PacketBufferOptions{
 		Data: buffer.View(data).ToVectorisedView(),
+	})
+}
+
+// This is a very obscure use-case seen in the code that verifies packets
+// before sending them out. It tries to parse the headers to verify.
+// PacketHeader was initially not designed to mix Push() and Consume(), but it
+// works and it's been relied upon. Include a test here.
+func TestPacketHeaderPushConsumeMixed(t *testing.T) {
+	link := makeView(10)
+	network := makeView(20)
+	data := makeView(30)
+
+	initData := append([]byte(nil), network...)
+	initData = append(initData, data...)
+	pk := NewPacketBuffer(PacketBufferOptions{
+		ReserveHeaderBytes: len(link),
+		Data:               buffer.NewViewFromBytes(initData).ToVectorisedView(),
+	})
+
+	// 1. Consume network header
+	gotNetwork, ok := pk.NetworkHeader().Consume(len(network))
+	if !ok {
+		t.Fatalf("pk.NetworkHeader().Consume(%d) = _, false; want _, true", len(network))
+	}
+	checkViewEqual(t, "gotNetwork", gotNetwork, network)
+
+	// 2. Push link header
+	copy(pk.LinkHeader().Push(len(link)), link)
+
+	checkPacketContents(t, "" /* prefix */, pk, packetContents{
+		link:    link,
+		network: network,
+		data:    data,
 	})
 }
 
@@ -437,23 +444,8 @@ func TestPacketBufferData(t *testing.T) {
 				checkData(t, pkt, []byte(tc.data+s))
 			})
 
-			// ReadFromData/VV
+			// ReadFromVV
 			for _, n := range []int{0, 1, 2, 7, 10, 14, 20} {
-				t.Run(fmt.Sprintf("ReadFromData%d", n), func(t *testing.T) {
-					s := "TO READ"
-					otherPkt := NewPacketBuffer(PacketBufferOptions{
-						Data: vv(s, s),
-					})
-					s += s
-
-					pkt := tc.makePkt(t)
-					pkt.Data().ReadFromData(otherPkt.Data(), n)
-
-					if n < len(s) {
-						s = s[:n]
-					}
-					checkData(t, pkt, []byte(tc.data+s))
-				})
 				t.Run(fmt.Sprintf("ReadFromVV%d", n), func(t *testing.T) {
 					s := "TO READ"
 					srcVV := vv(s, s)
@@ -480,18 +472,39 @@ func TestPacketBufferData(t *testing.T) {
 					t.Errorf("pkt.Data().ExtractVV().ToOwnedView() = %q, want %q", got, want)
 				}
 			})
-
-			// Replace
-			t.Run("Replace", func(t *testing.T) {
-				s := "REPLACED"
-
-				pkt := tc.makePkt(t)
-				pkt.Data().Replace(vv(s))
-
-				checkData(t, pkt, []byte(s))
-			})
 		})
 	}
+}
+
+type packetContents struct {
+	link      buffer.View
+	network   buffer.View
+	transport buffer.View
+	data      buffer.View
+}
+
+func checkPacketContents(t *testing.T, prefix string, pk *PacketBuffer, want packetContents) {
+	t.Helper()
+	// Headers.
+	checkPacketHeader(t, prefix+"pk.LinkHeader", pk.LinkHeader(), want.link)
+	checkPacketHeader(t, prefix+"pk.NetworkHeader", pk.NetworkHeader(), want.network)
+	checkPacketHeader(t, prefix+"pk.TransportHeader", pk.TransportHeader(), want.transport)
+	// Data.
+	checkData(t, pk, want.data)
+	// Whole packet.
+	checkViewEqual(t, prefix+"pk.Views()",
+		concatViews(pk.Views()...),
+		concatViews(want.link, want.network, want.transport, want.data))
+	// PayloadSince.
+	checkViewEqual(t, prefix+"PayloadSince(LinkHeader)",
+		PayloadSince(pk.LinkHeader()),
+		concatViews(want.link, want.network, want.transport, want.data))
+	checkViewEqual(t, prefix+"PayloadSince(NetworkHeader)",
+		PayloadSince(pk.NetworkHeader()),
+		concatViews(want.network, want.transport, want.data))
+	checkViewEqual(t, prefix+"PayloadSince(TransportHeader)",
+		PayloadSince(pk.TransportHeader()),
+		concatViews(want.transport, want.data))
 }
 
 func checkInitialPacketBuffer(t *testing.T, pk *PacketBuffer, opts PacketBufferOptions) {
@@ -510,19 +523,9 @@ func checkInitialPacketBuffer(t *testing.T, pk *PacketBuffer, opts PacketBufferO
 	if got, want := pk.Size(), len(data); got != want {
 		t.Errorf("Initial pk.Size() = %d, want %d", got, want)
 	}
-	checkData(t, pk, data)
-	checkViewEqual(t, "Initial pk.Views()", concatViews(pk.Views()...), data)
-	// Check the initial values for each header.
-	checkPacketHeader(t, "Initial pk.LinkHeader", pk.LinkHeader(), nil)
-	checkPacketHeader(t, "Initial pk.NetworkHeader", pk.NetworkHeader(), nil)
-	checkPacketHeader(t, "Initial pk.TransportHeader", pk.TransportHeader(), nil)
-	// Check the initial valies for PayloadSince.
-	checkViewEqual(t, "Initial PayloadSince(LinkHeader)",
-		PayloadSince(pk.LinkHeader()), data)
-	checkViewEqual(t, "Initial PayloadSince(NetworkHeader)",
-		PayloadSince(pk.NetworkHeader()), data)
-	checkViewEqual(t, "Initial PayloadSince(TransportHeader)",
-		PayloadSince(pk.TransportHeader()), data)
+	checkPacketContents(t, "Initial ", pk, packetContents{
+		data: data,
+	})
 }
 
 func checkPacketHeader(t *testing.T, name string, h PacketHeader, want []byte) {
@@ -540,7 +543,7 @@ func checkViewEqual(t *testing.T, what string, got, want buffer.View) {
 func checkData(t *testing.T, pkt *PacketBuffer, want []byte) {
 	t.Helper()
 	if got := concatViews(pkt.Data().Views()...); !bytes.Equal(got, want) {
-		t.Errorf("pkt.Data().Views() = %x, want %x", got, want)
+		t.Errorf("pkt.Data().Views() = 0x%x, want 0x%x", got, want)
 	}
 	if got := pkt.Data().Size(); got != len(want) {
 		t.Errorf("pkt.Data().Size() = %d, want %d", got, len(want))
