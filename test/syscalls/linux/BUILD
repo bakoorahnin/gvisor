@@ -1294,6 +1294,23 @@ cc_binary(
 )
 
 cc_binary(
+    name = "verity_mmap_test",
+    testonly = 1,
+    srcs = ["verity_mmap.cc"],
+    linkstatic = 1,
+    deps = [
+        "//test/util:capability_util",
+        gtest,
+        "//test/util:fs_util",
+        "//test/util:memory_util",
+        "//test/util:mount_util",
+        "//test/util:temp_path",
+        "//test/util:test_main",
+        "//test/util:test_util",
+    ],
+)
+
+cc_binary(
     name = "mount_test",
     testonly = 1,
     srcs = ["mount.cc"],
