@@ -6,6 +6,7 @@ go_library(
     name = "ipv6",
     srcs = [
         "dhcpv6configurationfromndpra_string.go",
+        "handlerasconfiguration_string.go",
         "icmp.go",
         "ipv6.go",
         "mld.go",
