@@ -21,66 +21,98 @@ import "gvisor.dev/gvisor/pkg/tcpip"
 // MultiCounterIPStats holds IP statistics, each counter may have several
 // versions.
 type MultiCounterIPStats struct {
-	// PacketsReceived is the number of IP packets received from the link layer.
+	// PacketsReceived is the number of IP packets received from the link
+	// layer.
 	PacketsReceived tcpip.MultiCounterStat
 
-	// DisabledPacketsReceived is the number of IP packets received from the link
-	// layer when the IP layer is disabled.
+	// DisabledPacketsReceived is the number of IP packets received from
+	// the link layer when the IP layer is disabled.
 	DisabledPacketsReceived tcpip.MultiCounterStat
 
-	// InvalidDestinationAddressesReceived is the number of IP packets received
-	// with an unknown or invalid destination address.
+	// InvalidDestinationAddressesReceived is the number of IP packets
+	// received with an unknown or invalid destination address.
 	InvalidDestinationAddressesReceived tcpip.MultiCounterStat
 
-	// InvalidSourceAddressesReceived is the number of IP packets received with a
-	// source address that should never have been received on the wire.
+	// InvalidSourceAddressesReceived is the number of IP packets received
+	// with a source address that should never have been received on the
+	// wire.
 	InvalidSourceAddressesReceived tcpip.MultiCounterStat
 
-	// PacketsDelivered is the number of incoming IP packets that are successfully
-	// delivered to the transport layer.
+	// UnrouteablePacketsDropped is the number of IP packets received
+	// which were dropped because the netstack could not construct a route
+	// to their destination.
+	UnrouteablePacketsDropped tcpip.MultiCounterStat
+
+	// PacketsDroppedDueToExhaustedTTL is the number of IP packets received
+	// which were dropped because their TTL was exhausted.
+	PacketsDroppedDueToExhaustedTTL tcpip.MultiCounterStat
+
+	// PacketsDroppedDueToLinkLocalSourceAddress is the number of IP packets
+	// which were dropped because they contained a link-local source
+	// address.
+	PacketsDroppedDueToLinkLocalSourceAddress tcpip.MultiCounterStat
+
+	// PacketsDroppedDueToLinkLocalDestAddress is the number of IP packets
+	// which were dropped because they contained a link-local destination
+	// address.
+	PacketsDroppedDueToLinkLocalDestAddress tcpip.MultiCounterStat
+
+	// PacketsDroppedDueToExtensionHeaderProblem is the number of IP packets
+	// received which were dropped because the netstack encountered a problem
+	// when processing an IPv6 Extension Header.
+	PacketsDroppedDueToExtensionHeaderProblem tcpip.MultiCounterStat
+
+	// PacketForwardingErrors is the number of IP packets received which
+	// could not be successfully forwarded.
+	PacketForwardingErrors tcpip.MultiCounterStat
+
+	// PacketsDelivered is the number of incoming IP packets that are
+	// successfully delivered to the transport layer.
 	PacketsDelivered tcpip.MultiCounterStat
 
 	// PacketsSent is the number of IP packets sent via WritePacket.
 	PacketsSent tcpip.MultiCounterStat
 
-	// OutgoingPacketErrors is the number of IP packets which failed to write to a
-	// link-layer endpoint.
+	// OutgoingPacketErrors is the number of IP packets which failed to
+	// write to a link-layer endpoint.
 	OutgoingPacketErrors tcpip.MultiCounterStat
 
-	// MalformedPacketsReceived is the number of IP Packets that were dropped due
-	// to the IP packet header failing validation checks.
+	// MalformedPacketsReceived is the number of IP Packets that were
+	// dropped due to the IP packet header failing validation checks.
 	MalformedPacketsReceived tcpip.MultiCounterStat
 
-	// MalformedFragmentsReceived is the number of IP Fragments that were dropped
-	// due to the fragment failing validation checks.
+	// MalformedFragmentsReceived is the number of IP Fragments that were
+	// dropped due to the fragment failing validation checks.
 	MalformedFragmentsReceived tcpip.MultiCounterStat
 
 	// IPTablesPreroutingDropped is the number of IP packets dropped in the
 	// Prerouting chain.
 	IPTablesPreroutingDropped tcpip.MultiCounterStat
 
-	// IPTablesInputDropped is the number of IP packets dropped in the Input
-	// chain.
+	// IPTablesInputDropped is the number of IP packets dropped in the
+	// Input chain.
 	IPTablesInputDropped tcpip.MultiCounterStat
 
-	// IPTablesOutputDropped is the number of IP packets dropped in the Output
-	// chain.
+	// IPTablesOutputDropped is the number of IP packets dropped in the
+	// Output chain.
 	IPTablesOutputDropped tcpip.MultiCounterStat
 
-	// IPTablesPostroutingDropped is the number of IP packets dropped in the
-	// Postrouting chain.
+	// IPTablesPostroutingDropped is the number of IP packets dropped in
+	// the Postrouting chain.
 	IPTablesPostroutingDropped tcpip.MultiCounterStat
 
-	// TODO(https://gvisor.dev/issues/5529): Move the IPv4-only option stats out
-	// of IPStats.
+	// TODO(https://gvisor.dev/issues/5529): Move the IPv4-only option
+	// stats out of IPStats.
 
 	// OptionTimestampReceived is the number of Timestamp options seen.
 	OptionTimestampReceived tcpip.MultiCounterStat
 
-	// OptionRecordRouteReceived is the number of Record Route options seen.
+	// OptionRecordRouteReceived is the number of Record Route options
+	// seen.
 	OptionRecordRouteReceived tcpip.MultiCounterStat
 
-	// OptionRouterAlertReceived is the number of Router Alert options seen.
+	// OptionRouterAlertReceived is the number of Router Alert options
+	// seen.
 	OptionRouterAlertReceived tcpip.MultiCounterStat
 
 	// OptionUnknownReceived is the number of unknown IP options seen.
@@ -93,6 +125,12 @@ func (m *MultiCounterIPStats) Init(a, b *tcpip.IPStats) {
 	m.DisabledPacketsReceived.Init(a.DisabledPacketsReceived, b.DisabledPacketsReceived)
 	m.InvalidDestinationAddressesReceived.Init(a.InvalidDestinationAddressesReceived, b.InvalidDestinationAddressesReceived)
 	m.InvalidSourceAddressesReceived.Init(a.InvalidSourceAddressesReceived, b.InvalidSourceAddressesReceived)
+	m.UnrouteablePacketsDropped.Init(a.UnrouteablePacketsDropped, b.UnrouteablePacketsDropped)
+	m.PacketForwardingErrors.Init(a.PacketForwardingErrors, b.PacketForwardingErrors)
+	m.PacketsDroppedDueToLinkLocalSourceAddress.Init(a.PacketsDroppedDueToLinkLocalSourceAddress, b.PacketsDroppedDueToLinkLocalSourceAddress)
+	m.PacketsDroppedDueToLinkLocalDestAddress.Init(a.PacketsDroppedDueToLinkLocalDestAddress, b.PacketsDroppedDueToLinkLocalDestAddress)
+	m.PacketsDroppedDueToExhaustedTTL.Init(a.PacketsDroppedDueToExhaustedTTL, b.PacketsDroppedDueToExhaustedTTL)
+	m.PacketsDroppedDueToExtensionHeaderProblem.Init(a.PacketsDroppedDueToExtensionHeaderProblem, b.PacketsDroppedDueToExtensionHeaderProblem)
 	m.PacketsDelivered.Init(a.PacketsDelivered, b.PacketsDelivered)
 	m.PacketsSent.Init(a.PacketsSent, b.PacketsSent)
 	m.OutgoingPacketErrors.Init(a.OutgoingPacketErrors, b.OutgoingPacketErrors)

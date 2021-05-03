@@ -1547,6 +1547,34 @@ type IPStats struct {
 	// source address that should never have been received on the wire.
 	InvalidSourceAddressesReceived *StatCounter
 
+	// UnrouteablePacketsDropped is the number of IP packets received
+	// which were dropped because the netstack could not construct a route to
+	// their destination.
+	UnrouteablePacketsDropped *StatCounter
+
+	// PacketsDroppedDueToExhaustedTTL is the number of IP packets received
+	// which were dropped because their TTL was exhausted.
+	PacketsDroppedDueToExhaustedTTL *StatCounter
+
+	// PacketsDroppedDueToLinkLocalSourceAddress is the number of IP packets
+	// which were dropped because they contained a link-local source
+	// address.
+	PacketsDroppedDueToLinkLocalSourceAddress *StatCounter
+
+	// PacketsDroppedDueToLinkLocalDestAddress is the number of IP packets
+	// which were dropped because they contained a link-local destination
+	// address.
+	PacketsDroppedDueToLinkLocalDestAddress *StatCounter
+
+	// PacketsDroppedDueToExtensionHeaderProblem is the number of IP packets
+	// received which were dropped because the netstack encountered a problem
+	// when processing an IPv6 extension header.
+	PacketsDroppedDueToExtensionHeaderProblem *StatCounter
+
+	// PacketForwardingErrors is the number of IP packets received which could not be
+	// successfully forwarded.
+	PacketForwardingErrors *StatCounter
+
 	// PacketsDelivered is the number of incoming IP packets that are successfully
 	// delivered to the transport layer.
 	PacketsDelivered *StatCounter
