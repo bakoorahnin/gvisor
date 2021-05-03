@@ -48,7 +48,7 @@ const (
 
 	// defaultHandleRAs is the default configuration for whether or not to
 	// handle incoming Router Advertisements as a host.
-	defaultHandleRAs = true
+	defaultHandleRAs = HandlingRAsEnabledWhenForwardingDisabled
 
 	// defaultDiscoverDefaultRouters is the default configuration for
 	// whether or not to discover default routers from incoming Router
@@ -301,10 +301,42 @@ type NDPDispatcher interface {
 	OnDHCPv6Configuration(tcpip.NICID, DHCPv6ConfigurationFromNDPRA)
 }
 
+// HandleRAsConfiguration enumerates when RAs may be handled.
+type HandleRAsConfiguration int
+
+const (
+	// HandlingRAsDisabled indicates that Router Advertisements will not be
+	// handled.
+	HandlingRAsDisabled HandleRAsConfiguration = iota
+
+	// HandlingRAsEnabledWhenForwardingDisabled indicates that router
+	// advertisements will only be handled when forwarding is disabled.
+	HandlingRAsEnabledWhenForwardingDisabled
+
+	// HandlingRAsAlwaysEnabled indicates that Router Advertisements will always
+	// be handled, even when forwarding is enabled.
+	HandlingRAsAlwaysEnabled
+)
+
+func (c HandleRAsConfiguration) enabled(forwarding bool) bool {
+	switch c {
+	case HandlingRAsDisabled:
+		return false
+	case HandlingRAsEnabledWhenForwardingDisabled:
+		return !forwarding
+	case HandlingRAsAlwaysEnabled:
+		return true
+	default:
+		panic(fmt.Sprintf("unhandled HandleRAsConfiguration = %d", c))
+	}
+}
+
 // NDPConfigurations is the NDP configurations for the netstack.
 type NDPConfigurations struct {
 	// The number of Router Solicitation messages to send when the IPv6 endpoint
 	// becomes enabled.
+	//
+	// Ignored unless configured to handle Router Advertisements.
 	MaxRtrSolicitations uint8
 
 	// The amount of time between transmitting Router Solicitation messages.
@@ -318,8 +350,9 @@ type NDPConfigurations struct {
 	// Must be greater than or equal to 0s.
 	MaxRtrSolicitationDelay time.Duration
 
-	// HandleRAs determines whether or not Router Advertisements are processed.
-	HandleRAs bool
+	// HandleRAs is the configuration for when Router Advertisements should be
+	// handled.
+	HandleRAs HandleRAsConfiguration
 
 	// DiscoverDefaultRouters determines whether or not default routers are
 	// discovered from Router Advertisements, as per RFC 4861 section 6. This
@@ -654,7 +687,8 @@ func (ndp *ndpState) handleRA(ip tcpip.Address, ra header.NDPRouterAdvert) {
 	// per-interface basis; it is a protocol-wide configuration, so we check the
 	// protocol's forwarding flag to determine if the IPv6 endpoint is forwarding
 	// packets.
-	if !ndp.configs.HandleRAs || ndp.ep.protocol.Forwarding() {
+	if !ndp.configs.HandleRAs.enabled(ndp.ep.protocol.Forwarding()) {
+		ndp.ep.stats.localStats.UnhandledRouterAdvertisements.Increment()
 		return
 	}
 
@@ -1609,44 +1643,16 @@ func (ndp *ndpState) cleanupTempSLAACAddrResourcesAndNotifyInner(tempAddrs map[t
 	delete(tempAddrs, tempAddr)
 }
 
-// removeSLAACAddresses removes all SLAAC addresses.
-//
-// If keepLinkLocal is false, the SLAAC generated link-local address is removed.
-//
-// The IPv6 endpoint that ndp belongs to MUST be locked.
-func (ndp *ndpState) removeSLAACAddresses(keepLinkLocal bool) {
-	linkLocalSubnet := header.IPv6LinkLocalPrefix.Subnet()
-	var linkLocalPrefixes int
-	for prefix, state := range ndp.slaacPrefixes {
-		// RFC 4862 section 5 states that routers are also expected to generate a
-		// link-local address so we do not invalidate them if we are cleaning up
-		// host-only state.
-		if keepLinkLocal && prefix == linkLocalSubnet {
-			linkLocalPrefixes++
-			continue
-		}
-
-		ndp.invalidateSLAACPrefix(prefix, state)
-	}
-
-	if got := len(ndp.slaacPrefixes); got != linkLocalPrefixes {
-		panic(fmt.Sprintf("ndp: still have non-linklocal SLAAC prefixes after cleaning up; found = %d prefixes, of which %d are link-local", got, linkLocalPrefixes))
-	}
-}
-
 // cleanupState cleans up ndp's state.
-//
-// If hostOnly is true, then only host-specific state is cleaned up.
 //
 // This function invalidates all discovered on-link prefixes, discovered
 // routers, and auto-generated addresses.
 //
-// If hostOnly is true, then the link-local auto-generated address aren't
-// invalidated as routers are also expected to generate a link-local address.
-//
 // The IPv6 endpoint that ndp belongs to MUST be locked.
-func (ndp *ndpState) cleanupState(hostOnly bool) {
-	ndp.removeSLAACAddresses(hostOnly /* keepLinkLocal */)
+func (ndp *ndpState) cleanupState() {
+	for prefix, state := range ndp.slaacPrefixes {
+		ndp.invalidateSLAACPrefix(prefix, state)
+	}
 
 	for prefix := range ndp.onLinkPrefixes {
 		ndp.invalidateOnLinkPrefix(prefix)
@@ -1670,6 +1676,10 @@ func (ndp *ndpState) cleanupState(hostOnly bool) {
 // startSolicitingRouters starts soliciting routers, as per RFC 4861 section
 // 6.3.7. If routers are already being solicited, this function does nothing.
 //
+// If ndp is not configured to handle Router Advertisements, routers will not
+// be solicited as there is no point soliciting routers if we don't handle their
+// advertisements.
+//
 // The IPv6 endpoint that ndp belongs to MUST be locked.
 func (ndp *ndpState) startSolicitingRouters() {
 	if ndp.rtrSolicitTimer.timer != nil {
@@ -1679,6 +1689,10 @@ func (ndp *ndpState) startSolicitingRouters() {
 
 	remaining := ndp.configs.MaxRtrSolicitations
 	if remaining == 0 {
+		return
+	}
+
+	if !ndp.configs.HandleRAs.enabled(ndp.ep.protocol.Forwarding()) {
 		return
 	}
 
@@ -1765,7 +1779,7 @@ func (ndp *ndpState) startSolicitingRouters() {
 
 			if remaining == 0 {
 				// We are done soliciting routers.
-				ndp.stopSolicitingRouters()
+				ndp.stopSolicitingRouters(false /* onlyIfNotHandlingRAs */)
 				return
 			}
 
@@ -1777,10 +1791,17 @@ func (ndp *ndpState) startSolicitingRouters() {
 // stopSolicitingRouters stops soliciting routers. If routers are not currently
 // being solicited, this function does nothing.
 //
+// If onlyIfNotHandlingRAs is true, router solicitations will only be stopped
+// if ndp is not configured to handle router advertisements.
+//
 // The IPv6 endpoint that ndp belongs to MUST be locked.
-func (ndp *ndpState) stopSolicitingRouters() {
+func (ndp *ndpState) stopSolicitingRouters(onlyIfNotHandlingRAs bool) {
 	if ndp.rtrSolicitTimer.timer == nil {
 		// Nothing to do.
+		return
+	}
+
+	if onlyIfNotHandlingRAs && ndp.configs.HandleRAs.enabled(ndp.ep.protocol.Forwarding()) {
 		return
 	}
 

@@ -420,11 +420,7 @@ func (e *endpoint) transitionForwarding(forwarding bool) {
 	defer e.mu.Unlock()
 
 	if forwarding {
-		// When transitioning into an IPv6 router, host-only state (NDP discovered
-		// routers, discovered on-link prefixes, and auto-generated addresses) is
-		// cleaned up/invalidated and NDP router solicitations are stopped.
-		e.mu.ndp.stopSolicitingRouters()
-		e.mu.ndp.cleanupState(true /* hostOnly */)
+		e.mu.ndp.stopSolicitingRouters(true /* onlyIfNotHandlingRAs */)
 
 		// As per RFC 4291 section 2.8:
 		//
@@ -552,17 +548,7 @@ func (e *endpoint) Enable() tcpip.Error {
 		e.mu.ndp.doSLAAC(header.IPv6LinkLocalPrefix.Subnet(), header.NDPInfiniteLifetime, header.NDPInfiniteLifetime)
 	}
 
-	// If we are operating as a router, then do not solicit routers since we
-	// won't process the RAs anyway.
-	//
-	// Routers do not process Router Advertisements (RA) the same way a host
-	// does. That is, routers do not learn from RAs (e.g. on-link prefixes
-	// and default routers). Therefore, soliciting RAs from other routers on
-	// a link is unnecessary for routers.
-	if !e.protocol.Forwarding() {
-		e.mu.ndp.startSolicitingRouters()
-	}
-
+	e.mu.ndp.startSolicitingRouters()
 	return nil
 }
 
@@ -599,7 +585,7 @@ func (e *endpoint) disableLocked() {
 		return
 	}
 
-	e.mu.ndp.stopSolicitingRouters()
+	e.mu.ndp.stopSolicitingRouters(false /* onlyIfNotHandlingRAs */)
 	// Stop DAD for all the tentative unicast addresses.
 	e.mu.addressableEndpointState.ForEachEndpoint(func(addressEndpoint stack.AddressEndpoint) bool {
 		if addressEndpoint.GetKind() != stack.PermanentTentative {
@@ -613,7 +599,7 @@ func (e *endpoint) disableLocked() {
 
 		return true
 	})
-	e.mu.ndp.cleanupState(false /* hostOnly */)
+	e.mu.ndp.cleanupState()
 
 	// The endpoint may have already left the multicast group.
 	switch err := e.leaveGroupLocked(header.IPv6AllNodesMulticastAddress).(type) {
